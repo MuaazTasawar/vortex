@@ -1,14 +1,7 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod gossip;
+pub mod message;
+pub mod raft_lite;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use gossip::Gossip;
+pub use message::{ClusterMessage, MemberInfo, MemberState, NodeId};
+pub use raft_lite::{Election, Role};
