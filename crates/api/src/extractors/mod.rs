@@ -1,0 +1,1 @@
+// AuthUser extractor added in Phase 2 — placeholder for now.

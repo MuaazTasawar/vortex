@@ -1,0 +1,1 @@
+// Auth handlers added in Phase 2 (JWT auth) — placeholder for now.
