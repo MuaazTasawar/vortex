@@ -1,6 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A fixed-size time window used by the aggregation engine. Windows are
+/// half-open [start, end) so events land in exactly one window with no
+/// double-counting at boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Window {
     pub start_ms: i64,
     pub end_ms: i64,

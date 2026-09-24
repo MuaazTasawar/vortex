@@ -5,8 +5,17 @@ edition = "2024"
 
 [dependencies]
 crossbeam-utils = "0.8.23"
+domain = { version = "0.1.0", path = "../domain" }
+wide = "1.7.1"
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"] }
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(loom)'] }
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "simd_vs_scalar"
+harness = false
