@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow.workspace = true
+domain = { version = "0.1.0", path = "../domain" }
+inventory = "0.3.24"
+macros = { version = "0.1.0", path = "../macros" }
+serde_json.workspace = true
+wasmtime = "49.0.1"
+
+[dev-dependencies]
+wat = "1.259.0"
