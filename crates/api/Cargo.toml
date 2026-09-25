@@ -28,3 +28,4 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
 futures = "0.3.34"
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

@@ -4,6 +4,11 @@ use axum::middleware::Next;
 use axum::response::Response;
 use uuid::Uuid;
 
+/// Stashed in request extensions for any handler that wants to correlate
+/// its own logs with the `x-request-id` response header. Not read by any
+/// handler yet, which is why this carries an explicit dead-code
+/// allowance rather than being silently unused.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct RequestId(pub String);
 
