@@ -13,6 +13,7 @@ use plugins::TransformRegistry;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
+use tokio_util::sync::CancellationToken;
 
 pub struct AppState {
     pub db_pool: sqlx::PgPool,
@@ -26,11 +27,6 @@ pub struct AppState {
     pub checkpoint_repo: CheckpointRepo,
 }
 
-/// Builds a fully wired `AppState` — real gossip/election bound to the
-/// given address, a fresh ring buffer + aggregator, native transforms
-/// loaded, `CheckpointRepo` over the given pool. Shared by `main.rs`
-/// (production) and integration tests (against a testcontainers
-/// Postgres), so the two paths can't silently drift apart.
 pub async fn build_state(settings: Settings, db_pool: sqlx::PgPool) -> anyhow::Result<Arc<AppState>> {
     let node_id = uuid::Uuid::new_v4().to_string();
     let gossip_addr: std::net::SocketAddr = settings.gossip_bind_addr.parse()?;
@@ -60,10 +56,6 @@ pub async fn build_state(settings: Settings, db_pool: sqlx::PgPool) -> anyhow::R
     }))
 }
 
-/// Drains whatever's currently in the ring buffer into the aggregator,
-/// once. Exposed `pub` so integration tests can call this directly
-/// instead of sleep-polling a spawned background loop, which would make
-/// the test both slower and slightly flaky.
 pub async fn drain_ingestion_once(state: &Arc<AppState>) -> usize {
     let mut drained = 0;
     while let Some(event) = state.ingestion.try_pop() {
@@ -73,46 +65,71 @@ pub async fn drain_ingestion_once(state: &Arc<AppState>) -> usize {
     drained
 }
 
-pub async fn consume_ingestion_loop(state: Arc<AppState>) {
+/// Runs until `cancel` fires, then returns — letting `main` wait for this
+/// to actually finish its current iteration rather than being dropped
+/// mid-work when the process exits.
+pub async fn consume_ingestion_loop(state: Arc<AppState>, cancel: CancellationToken) {
     loop {
-        if drain_ingestion_once(&state).await == 0 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!("consume_ingestion_loop shutting down");
+                break;
+            }
+            _ = async {
+                if drain_ingestion_once(&state).await == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            } => {}
         }
     }
 }
 
-pub async fn broadcast_stats_loop(state: Arc<AppState>) {
+pub async fn broadcast_stats_loop(state: Arc<AppState>, cancel: CancellationToken) {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     loop {
-        tick.tick().await;
-        let snapshot: Vec<((u64, domain::Window), engine::WindowStats)> =
-            state.aggregator.read().await.finalize().into_iter().collect();
-        if let Ok(json) = serde_json::to_string(&snapshot) {
-            let _ = state.stats_tx.send(json);
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!("broadcast_stats_loop shutting down");
+                break;
+            }
+            _ = tick.tick() => {
+                let snapshot: Vec<((u64, domain::Window), engine::WindowStats)> =
+                    state.aggregator.read().await.finalize().into_iter().collect();
+                if let Ok(json) = serde_json::to_string(&snapshot) {
+                    let _ = state.stats_tx.send(json);
+                }
+            }
         }
     }
 }
 
-pub async fn persist_checkpoints_loop(state: Arc<AppState>) {
+pub async fn persist_checkpoints_loop(state: Arc<AppState>, cancel: CancellationToken) {
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     loop {
-        tick.tick().await;
-        let snapshot: Vec<((u64, domain::Window), engine::WindowStats)> =
-            state.aggregator.read().await.finalize().into_iter().collect();
-        for ((stream_id, window), stats) in snapshot {
-            let stats_json = match serde_json::to_value(&stats) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to serialize window stats for checkpoint");
-                    continue;
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!("persist_checkpoints_loop shutting down");
+                break;
+            }
+            _ = tick.tick() => {
+                let snapshot: Vec<((u64, domain::Window), engine::WindowStats)> =
+                    state.aggregator.read().await.finalize().into_iter().collect();
+                for ((stream_id, window), stats) in snapshot {
+                    let stats_json = match serde_json::to_value(&stats) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to serialize window stats for checkpoint");
+                            continue;
+                        }
+                    };
+                    if let Err(e) = state
+                        .checkpoint_repo
+                        .upsert(stream_id as i64, window.start_ms, window.end_ms, &stats_json)
+                        .await
+                    {
+                        tracing::warn!(error = %e, stream_id, "checkpoint upsert failed, will retry next tick");
+                    }
                 }
-            };
-            if let Err(e) = state
-                .checkpoint_repo
-                .upsert(stream_id as i64, window.start_ms, window.end_ms, &stats_json)
-                .await
-            {
-                tracing::warn!(error = %e, stream_id, "checkpoint upsert failed, will retry next tick");
             }
         }
     }

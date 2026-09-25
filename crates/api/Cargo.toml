@@ -20,6 +20,7 @@ serde_json.workspace = true
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["full"] }
+tokio-util = "0.7.19"
 tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["trace", "cors"] }
 tracing.workspace = true
