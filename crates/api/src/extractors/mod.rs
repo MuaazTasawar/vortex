@@ -1,1 +1,2 @@
-// AuthUser extractor added in Phase 2 — placeholder for now.
+pub mod auth_user;
+pub use auth_user::AuthUser;

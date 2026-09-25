@@ -4,10 +4,11 @@
 
 use crate::simd_agg::sum_simd;
 use domain::{Event, Window};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowStats {
     pub count: usize,
     pub sum: f64,
@@ -82,8 +83,8 @@ mod tests {
         let mut agg = WindowAggregator::new(Duration::from_millis(1000));
         let payload: Vec<u8> = 1.0f64.to_le_bytes().to_vec();
 
-        agg.ingest(&Event::borrowed(1, 500, "k", &payload));   // window [0, 1000)
-        agg.ingest(&Event::borrowed(1, 1500, "k", &payload));  // window [1000, 2000)
+        agg.ingest(&Event::borrowed(1, 500, "k", &payload));
+        agg.ingest(&Event::borrowed(1, 1500, "k", &payload));
 
         assert_eq!(agg.finalize().len(), 2);
     }

@@ -1,1 +1,4 @@
-// Auth handlers added in Phase 2 (JWT auth) — placeholder for now.
+pub mod auth;
+pub mod cluster;
+pub mod ingest;
+pub mod query;

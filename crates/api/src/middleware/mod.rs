@@ -1,1 +1,2 @@
-// request_id + auth middleware added in Phase 2 — placeholder for now.
+pub mod request_id;
+pub use request_id::request_id;
