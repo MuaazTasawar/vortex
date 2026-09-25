@@ -8,12 +8,14 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct QueryParams {
+    pub stream_id: Option<u64>,
     pub start_ms: Option<i64>,
     pub end_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
 pub struct WindowStatsDto {
+    pub stream_id: u64,
     pub start_ms: i64,
     pub end_ms: i64,
     pub count: usize,
@@ -32,11 +34,13 @@ pub async fn query_windows(
     let mut out: Vec<WindowStatsDto> = aggregator
         .finalize()
         .into_iter()
-        .filter(|(w, _)| {
-            params.start_ms.map_or(true, |s| w.start_ms >= s)
+        .filter(|((sid, w), _)| {
+            params.stream_id.map_or(true, |s| s == *sid)
+                && params.start_ms.map_or(true, |s| w.start_ms >= s)
                 && params.end_ms.map_or(true, |e| w.end_ms <= e)
         })
-        .map(|(w, s)| WindowStatsDto {
+        .map(|((sid, w), s)| WindowStatsDto {
+            stream_id: sid,
             start_ms: w.start_ms,
             end_ms: w.end_ms,
             count: s.count,
@@ -46,6 +50,6 @@ pub async fn query_windows(
             max: s.max,
         })
         .collect();
-    out.sort_by_key(|w| w.start_ms);
+    out.sort_by_key(|w| (w.stream_id, w.start_ms));
     Json(out)
 }

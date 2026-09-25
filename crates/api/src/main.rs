@@ -7,6 +7,7 @@ mod ws;
 
 use cluster::{Election, Gossip};
 use engine::{RingBuffer, WindowAggregator};
+use infra::checkpoint_repo::CheckpointRepo;
 use infra::config::Settings;
 use plugins::TransformRegistry;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ pub struct AppState {
     pub stats_tx: broadcast::Sender<String>,
     pub gossip: Arc<Gossip>,
     pub election: Arc<Election>,
+    pub checkpoint_repo: CheckpointRepo,
 }
 
 #[tokio::main]
@@ -53,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(election.clone().run(election_rx));
 
     let (stats_tx, _) = broadcast::channel(64);
+    let checkpoint_repo = CheckpointRepo::new(db_pool.clone());
 
     let state = Arc::new(AppState {
         db_pool,
@@ -63,10 +66,12 @@ async fn main() -> anyhow::Result<()> {
         stats_tx,
         gossip,
         election,
+        checkpoint_repo,
     });
 
     tokio::spawn(consume_ingestion(state.clone()));
     tokio::spawn(broadcast_stats(state.clone()));
+    tokio::spawn(persist_checkpoints(state.clone()));
 
     let app = routes::build_router(state);
     let listener = tokio::net::TcpListener::bind(&settings.http_bind_addr).await?;
@@ -92,10 +97,39 @@ async fn broadcast_stats(state: Arc<AppState>) {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     loop {
         tick.tick().await;
-        let snapshot: Vec<(domain::Window, engine::WindowStats)> =
+        let snapshot: Vec<((u64, domain::Window), engine::WindowStats)> =
             state.aggregator.read().await.finalize().into_iter().collect();
         if let Ok(json) = serde_json::to_string(&snapshot) {
             let _ = state.stats_tx.send(json);
+        }
+    }
+}
+
+/// Periodically upserts every in-memory window into `checkpoints`. A
+/// failed write here is logged, not propagated — a transient DB outage
+/// shouldn't take down ingestion, since the in-memory aggregator still
+/// holds the data and the next tick will retry the write.
+async fn persist_checkpoints(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        tick.tick().await;
+        let snapshot: Vec<((u64, domain::Window), engine::WindowStats)> =
+            state.aggregator.read().await.finalize().into_iter().collect();
+        for ((stream_id, window), stats) in snapshot {
+            let stats_json = match serde_json::to_value(&stats) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to serialize window stats for checkpoint");
+                    continue;
+                }
+            };
+            if let Err(e) = state
+                .checkpoint_repo
+                .upsert(stream_id as i64, window.start_ms, window.end_ms, &stats_json)
+                .await
+            {
+                tracing::warn!(error = %e, stream_id, "checkpoint upsert failed, will retry next tick");
+            }
         }
     }
 }

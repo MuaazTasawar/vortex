@@ -1,6 +1,14 @@
 //! Buckets events into fixed windows and computes per-window stats.
 //! `sum`/`mean` use the SIMD path; `min`/`max` are plain scalar scans
 //! (see simd_agg.rs module docs for why min/max weren't SIMD'd here).
+//!
+//! Windows are keyed by `(stream_id, Window)`, not just `Window` — an
+//! earlier version keyed by window alone, which silently merged every
+//! stream's events into the same bucket. That only became visible once
+//! Phase 7 needed a `stream_id` to persist checkpoints by, which is
+//! exactly the kind of bug a type-level shortcut like "just use the
+//! window as the key" tends to hide until something downstream needs
+//! the information that got discarded.
 
 use crate::simd_agg::sum_simd;
 use domain::{Event, Window};
@@ -19,7 +27,7 @@ pub struct WindowStats {
 
 pub struct WindowAggregator {
     window_size: Duration,
-    windows: HashMap<Window, Vec<f64>>,
+    windows: HashMap<(u64, Window), Vec<f64>>,
 }
 
 impl WindowAggregator {
@@ -27,25 +35,25 @@ impl WindowAggregator {
         WindowAggregator { window_size, windows: HashMap::new() }
     }
 
-    /// Silently drops events whose payload isn't a well-formed f64
-    /// array (see `Event::as_f64_slice`) — non-numeric events simply
-    /// aren't part of this aggregation.
     pub fn ingest(&mut self, event: &Event<'_>) {
         let Some(values) = event.as_f64_slice() else { return };
         let window = Window::covering(event.timestamp_ms, self.window_size);
-        self.windows.entry(window).or_default().extend_from_slice(values);
+        self.windows
+            .entry((event.stream_id, window))
+            .or_default()
+            .extend_from_slice(values);
     }
 
-    pub fn finalize(&self) -> HashMap<Window, WindowStats> {
+    pub fn finalize(&self) -> HashMap<(u64, Window), WindowStats> {
         self.windows
             .iter()
-            .map(|(window, values)| {
+            .map(|((stream_id, window), values)| {
                 let count = values.len();
                 let sum = sum_simd(values);
                 let mean = if count > 0 { sum / count as f64 } else { 0.0 };
                 let min = values.iter().copied().fold(f64::INFINITY, f64::min);
                 let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                (*window, WindowStats { count, sum, mean, min, max })
+                ((*stream_id, *window), WindowStats { count, sum, mean, min, max })
             })
             .collect()
     }
@@ -70,7 +78,8 @@ mod tests {
 
         let stats = agg.finalize();
         assert_eq!(stats.len(), 1);
-        let (_, s) = stats.iter().next().unwrap();
+        let ((stream_id, _window), s) = stats.iter().next().unwrap();
+        assert_eq!(*stream_id, 1);
         assert_eq!(s.count, 2);
         assert_eq!(s.sum, 6.0);
         assert_eq!(s.mean, 3.0);
@@ -87,5 +96,24 @@ mod tests {
         agg.ingest(&Event::borrowed(1, 1500, "k", &payload));
 
         assert_eq!(agg.finalize().len(), 2);
+    }
+
+    #[test]
+    fn events_from_different_streams_in_the_same_time_window_stay_separate() {
+        // The bug this test guards against: before the (stream_id, Window)
+        // key, these two events would have landed in the same bucket and
+        // been summed together, even though they belong to unrelated streams.
+        let mut agg = WindowAggregator::new(Duration::from_millis(1000));
+        let payload: Vec<u8> = 10.0f64.to_le_bytes().to_vec();
+
+        agg.ingest(&Event::borrowed(1, 500, "k", &payload));
+        agg.ingest(&Event::borrowed(2, 500, "k", &payload));
+
+        let stats = agg.finalize();
+        assert_eq!(stats.len(), 2, "expected two separate per-stream windows, not one merged window");
+        for (_, s) in stats.iter() {
+            assert_eq!(s.count, 1);
+            assert_eq!(s.sum, 10.0);
+        }
     }
 }

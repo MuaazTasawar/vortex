@@ -67,7 +67,7 @@ mod tests {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use tokio::sync::{broadcast, RwLock};
 
-    /// Builds a real `AppState` without opening a database connection â€”
+    /// Builds a real `AppState` without opening a database connection Ã¢â‚¬â€
     /// `connect_lazy` validates the URL but defers the actual socket
     /// connect until a query runs, which lets us exercise auth logic
     /// (which never touches the DB) without needing Postgres running.
@@ -93,11 +93,16 @@ mod tests {
             stats_tx: broadcast::channel(1).0,
             gossip: test_gossip(),
             election: test_election(),
+            checkpoint_repo: infra::checkpoint_repo::CheckpointRepo::new(
+                sqlx::postgres::PgPoolOptions::new()
+                    .connect_lazy("postgres://user:pass@localhost/db")
+                    .expect("connect_lazy should not require a live connection"),
+            ),
         })
     }
 
     // Gossip/Election aren't exercised by these tests, but AppState needs
-    // real values to construct â€” bind on port 0 (OS-assigned) so tests
+    // real values to construct Ã¢â‚¬â€ bind on port 0 (OS-assigned) so tests
     // never collide with each other or a real running node.
     fn test_gossip() -> Arc<cluster::Gossip> {
         Arc::new(
