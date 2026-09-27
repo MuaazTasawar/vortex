@@ -4,7 +4,15 @@ targets = []
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = []
+ignore = [
+    # Marvin Attack timing side-channel in `rsa`, pulled in transitively via
+    # jsonwebtoken's rust_crypto feature. This project only ever signs JWTs
+    # with HS256 (HMAC) — see issue_token() in crates/api/src/handlers/auth.rs,
+    # which uses Header::default() — so the vulnerable RSA private-key code
+    # path is never exercised. No patched version of `rsa` exists (confirmed
+    # in the advisory itself: "No safe upgrade is available").
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
 allow = [
@@ -15,10 +23,8 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Zlib",
     "CC0-1.0",
-    "MPL-2.0",
 ]
 confidence-threshold = 0.8
 
