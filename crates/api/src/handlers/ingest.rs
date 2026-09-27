@@ -1,14 +1,14 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use base64::Engine;
 use domain::Event;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::error::ApiError;
 use crate::extractors::auth_user::AuthUser;
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct IngestRequest {

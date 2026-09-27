@@ -1,16 +1,16 @@
-//! Hand-rolled fixed-window per-IP rate limiter — not an external crate.
+//! Hand-rolled fixed-window per-IP rate limiter â€” not an external crate.
 //! After three separate dependency-drift incidents already this project
 //! (argon2, jsonwebtoken, axum's ws feature), the last phase isn't the
 //! place to gamble on a fourth; this is small enough to own outright.
 //!
 //! Fixed-window, not a token bucket: simpler, and "N requests per
 //! rolling second per IP" is precise enough for this purpose. The known
-//! limitation — the IP map only grows, never evicts idle entries — is a
+//! limitation â€” the IP map only grows, never evicts idle entries â€” is a
 //! real gap for a long-running production node and would need a TTL
 //! sweep; noted rather than hidden.
 //!
 //! `ConnectInfo` is read directly out of `req.extensions()` rather than
-//! taken as a typed extractor parameter — an `Option<ConnectInfo<_>>`
+//! taken as a typed extractor parameter â€” an `Option<ConnectInfo<_>>`
 //! parameter on a `from_fn` closure doesn't satisfy axum 0.8.9's
 //! generated `Service` bounds (a real rough edge, not a misunderstanding
 //! of the API), so this sidesteps that code path entirely while doing
@@ -76,12 +76,15 @@ pub async fn check_and_respond(
     // populated by `into_make_service_with_connect_info`; a Router
     // called directly via `.oneshot()` in tests won't, and in that case
     // limiting is skipped rather than rejected.
-    let addr = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|ci| ci.0);
+    let addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
 
-    if let Some(addr) = addr {
-        if !limiter.check(addr).await {
-            return Err(StatusCode::TOO_MANY_REQUESTS);
-        }
+    if let Some(addr) = addr
+        && !limiter.check(addr).await
+    {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 
     Ok(next.run(req).await)
@@ -99,7 +102,10 @@ mod tests {
         for _ in 0..MAX_REQUESTS_PER_WINDOW {
             assert!(limiter.check(addr).await, "should allow up to the limit");
         }
-        assert!(!limiter.check(addr).await, "should reject once over the limit");
+        assert!(
+            !limiter.check(addr).await,
+            "should reject once over the limit"
+        );
     }
 
     #[tokio::test]
@@ -112,6 +118,9 @@ mod tests {
             assert!(limiter.check(a).await);
         }
         assert!(!limiter.check(a).await);
-        assert!(limiter.check(b).await, "a different IP must not be affected by a's limit");
+        assert!(
+            limiter.check(b).await,
+            "a different IP must not be affected by a's limit"
+        );
     }
 }

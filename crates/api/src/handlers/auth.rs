@@ -1,15 +1,15 @@
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use axum::extract::State;
-use axum::Json;
-use jsonwebtoken::{encode, EncodingKey, Header};
 use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use axum::Json;
+use axum::extract::State;
+use jsonwebtoken::{EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::error::ApiError;
 use crate::extractors::auth_user::Claims;
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct RegisterRequest {
@@ -66,10 +66,11 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
-    let row: Option<UserRow> = sqlx::query_as("SELECT id, password_hash FROM users WHERE username = $1")
-        .bind(&req.username)
-        .fetch_optional(&state.db_pool)
-        .await?;
+    let row: Option<UserRow> =
+        sqlx::query_as("SELECT id, password_hash FROM users WHERE username = $1")
+            .bind(&req.username)
+            .fetch_optional(&state.db_pool)
+            .await?;
 
     let row = row.ok_or_else(|| ApiError::Unauthorized("invalid username or password".into()))?;
 
@@ -85,7 +86,14 @@ pub async fn login(
 
 fn issue_token(user_id: &str, secret: &str) -> Result<String, ApiError> {
     let exp = (chrono::Utc::now() + chrono::Duration::hours(24)).timestamp() as usize;
-    let claims = Claims { sub: user_id.to_string(), exp };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
-        .map_err(|e| ApiError::Internal(e.to_string()))
+    let claims = Claims {
+        sub: user_id.to_string(),
+        exp,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| ApiError::Internal(e.to_string()))
 }

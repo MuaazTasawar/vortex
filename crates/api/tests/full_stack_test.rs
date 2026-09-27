@@ -1,17 +1,23 @@
 use api::{build_state, drain_ingestion_once, routes};
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use base64::Engine;
 use infra::config::Settings;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn full_gateway_flow_against_a_real_postgres() {
-    let container = Postgres::default().start().await.expect("postgres container starts");
-    let port = container.get_host_port_ipv4(5432).await.expect("postgres port");
+    let container = Postgres::default()
+        .start()
+        .await
+        .expect("postgres container starts");
+    let port = container
+        .get_host_port_ipv4(5432)
+        .await
+        .expect("postgres port");
     let db_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
 
     let db_pool = sqlx::postgres::PgPoolOptions::new()
@@ -42,7 +48,9 @@ async fn full_gateway_flow_against_a_real_postgres() {
                 .method("POST")
                 .uri("/auth/register")
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "username": "alice", "password": "hunter42" }).to_string()))
+                .body(Body::from(
+                    json!({ "username": "alice", "password": "hunter42" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -62,7 +70,9 @@ async fn full_gateway_flow_against_a_real_postgres() {
                 .method("POST")
                 .uri("/auth/register")
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "username": "alice", "password": "hunter42" }).to_string()))
+                .body(Body::from(
+                    json!({ "username": "alice", "password": "hunter42" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -77,7 +87,9 @@ async fn full_gateway_flow_against_a_real_postgres() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "username": "alice", "password": "wrong" }).to_string()))
+                .body(Body::from(
+                    json!({ "username": "alice", "password": "wrong" }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -93,7 +105,8 @@ async fn full_gateway_flow_against_a_real_postgres() {
                 .uri("/ingest")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({ "stream_id": 1, "timestamp_ms": 500, "key": "k", "payload_b64": "" }).to_string(),
+                    json!({ "stream_id": 1, "timestamp_ms": 500, "key": "k", "payload_b64": "" })
+                        .to_string(),
                 ))
                 .unwrap(),
         )
@@ -151,7 +164,11 @@ async fn full_gateway_flow_against_a_real_postgres() {
 
     // 7. checkpoint persistence round-trips through real Postgres
     let stats_json = json!({ "count": 1, "sum": 5.0, "mean": 5.0, "min": 5.0, "max": 5.0 });
-    state.checkpoint_repo.upsert(1, 0, 1000, &stats_json).await.expect("checkpoint upserts");
+    state
+        .checkpoint_repo
+        .upsert(1, 0, 1000, &stats_json)
+        .await
+        .expect("checkpoint upserts");
 
     let res = app
         .clone()
@@ -173,7 +190,13 @@ async fn full_gateway_flow_against_a_real_postgres() {
 
     // 8. cluster status is reachable and reports this node
     let res = app
-        .oneshot(Request::builder().method("GET").uri("/cluster/status").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/cluster/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);

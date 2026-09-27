@@ -25,7 +25,11 @@ impl WasmTransform {
     pub fn load(name: impl Into<String>, wasm_bytes: &[u8]) -> anyhow::Result<Self> {
         let engine = Engine::default();
         let module = Module::new(&engine, wasm_bytes)?;
-        Ok(WasmTransform { name: name.into(), engine, module })
+        Ok(WasmTransform {
+            name: name.into(),
+            engine,
+            module,
+        })
     }
 
     fn run(&self, input_json: &[u8]) -> anyhow::Result<Vec<u8>> {

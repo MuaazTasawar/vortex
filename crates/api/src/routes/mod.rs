@@ -1,12 +1,12 @@
-use axum::routing::{get, post};
 use axum::Router;
+use axum::routing::{get, post};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
-use crate::handlers::{auth, checkpoints, cluster, ingest, query};
-use crate::middleware::rate_limit::{check_and_respond, RateLimiterState};
-use crate::middleware::request_id;
 use crate::AppState;
+use crate::handlers::{auth, checkpoints, cluster, ingest, query};
+use crate::middleware::rate_limit::{RateLimiterState, check_and_respond};
+use crate::middleware::request_id;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     let limiter = RateLimiterState::default();

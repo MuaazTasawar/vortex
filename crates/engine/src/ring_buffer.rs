@@ -72,8 +72,7 @@ impl<T> RingBuffer<T> {
                         // are the unique thread that claimed this slot —
                         // no other producer can observe the same `pos`
                         // until we release it by bumping `sequence` below.
-                        cell.value
-                            .with_mut(|slot| unsafe { (*slot).write(value) });
+                        cell.value.with_mut(|slot| unsafe { (*slot).write(value) });
                         cell.sequence.store(pos.wrapping_add(1), Ordering::Release);
                         return Ok(());
                     }

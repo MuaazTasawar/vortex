@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::{interval, timeout};
 
 const PROBE_INTERVAL: Duration = Duration::from_millis(500);
@@ -41,7 +41,12 @@ impl Gossip {
         let mut members = HashMap::new();
         members.insert(
             id.clone(),
-            MemberInfo { id: id.clone(), addr: local_addr, incarnation: 0, state: MemberState::Alive },
+            MemberInfo {
+                id: id.clone(),
+                addr: local_addr,
+                incarnation: 0,
+                state: MemberState::Alive,
+            },
         );
         Ok(Gossip {
             id,
@@ -54,7 +59,10 @@ impl Gossip {
     }
 
     pub async fn join(&self, seed: SocketAddr) -> std::io::Result<()> {
-        let msg = ClusterMessage::Join { from: self.id.clone(), addr: self.addr };
+        let msg = ClusterMessage::Join {
+            from: self.id.clone(),
+            addr: self.addr,
+        };
         self.send_to(seed, &msg).await
     }
 
@@ -120,9 +128,14 @@ impl Gossip {
             let Some(target) = target else { continue };
 
             let (tx, rx) = oneshot::channel();
-            self.pending_acks.write().await.insert(target.id.clone(), tx);
+            self.pending_acks
+                .write()
+                .await
+                .insert(target.id.clone(), tx);
 
-            let ping = ClusterMessage::Ping { from: self.id.clone() };
+            let ping = ClusterMessage::Ping {
+                from: self.id.clone(),
+            };
             if self.send_to(target.addr, &ping).await.is_err() {
                 self.pending_acks.write().await.remove(&target.id);
                 continue;
@@ -138,12 +151,12 @@ impl Gossip {
     async fn mark_suspect(&self, id: &NodeId) {
         {
             let mut members = self.members.write().await;
-            if let Some(m) = members.get_mut(id) {
-                if m.state == MemberState::Alive {
-                    tracing::warn!(node = %id, "marking suspect");
-                    m.state = MemberState::Suspect;
-                    m.incarnation += 1;
-                }
+            if let Some(m) = members.get_mut(id)
+                && m.state == MemberState::Alive
+            {
+                tracing::warn!(node = %id, "marking suspect");
+                m.state = MemberState::Suspect;
+                m.incarnation += 1;
             }
         }
         let members_handle = self.members.clone();
@@ -151,11 +164,11 @@ impl Gossip {
         tokio::spawn(async move {
             tokio::time::sleep(SUSPECT_TIMEOUT).await;
             let mut members = members_handle.write().await;
-            if let Some(m) = members.get_mut(&id) {
-                if m.state == MemberState::Suspect {
-                    tracing::warn!(node = %id, "marking dead");
-                    m.state = MemberState::Dead;
-                }
+            if let Some(m) = members.get_mut(&id)
+                && m.state == MemberState::Suspect
+            {
+                tracing::warn!(node = %id, "marking dead");
+                m.state = MemberState::Dead;
             }
         });
     }
@@ -163,8 +176,12 @@ impl Gossip {
     async fn recv_loop(self: Arc<Self>) {
         let mut buf = [0u8; 4096];
         loop {
-            let Ok((len, from_addr)) = self.socket.recv_from(&mut buf).await else { continue };
-            let Ok(msg) = serde_json::from_slice::<ClusterMessage>(&buf[..len]) else { continue };
+            let Ok((len, from_addr)) = self.socket.recv_from(&mut buf).await else {
+                continue;
+            };
+            let Ok(msg) = serde_json::from_slice::<ClusterMessage>(&buf[..len]) else {
+                continue;
+            };
             self.handle_message(msg, from_addr).await;
         }
     }
@@ -182,11 +199,17 @@ impl Gossip {
             }
             ClusterMessage::Ping { from } => {
                 let snapshot = self.members().await;
-                let ack = ClusterMessage::Ack { from: self.id.clone(), members: snapshot };
+                let ack = ClusterMessage::Ack {
+                    from: self.id.clone(),
+                    members: snapshot,
+                };
                 let _ = self.send_to(from_addr, &ack).await;
                 self.revive(&from, from_addr).await;
             }
-            ClusterMessage::Ack { from, members: their_members } => {
+            ClusterMessage::Ack {
+                from,
+                members: their_members,
+            } => {
                 self.revive(&from, from_addr).await;
                 self.merge(their_members).await;
                 if let Some(tx) = self.pending_acks.write().await.remove(&from) {
@@ -209,7 +232,12 @@ impl Gossip {
         members
             .entry(id.clone())
             .and_modify(|m| m.state = MemberState::Alive)
-            .or_insert(MemberInfo { id: id.clone(), addr, incarnation: 0, state: MemberState::Alive });
+            .or_insert(MemberInfo {
+                id: id.clone(),
+                addr,
+                incarnation: 0,
+                state: MemberState::Alive,
+            });
     }
 
     async fn merge(&self, incoming: Vec<MemberInfo>) {

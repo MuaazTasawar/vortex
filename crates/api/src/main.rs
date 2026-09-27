@@ -29,9 +29,12 @@ async fn main() -> anyhow::Result<()> {
     let app = api::routes::build_router(state);
     let listener = tokio::net::TcpListener::bind(&settings.http_bind_addr).await?;
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal(cancel))
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(cancel))
+    .await?;
 
     tracing::info!("server stopped, waiting for background tasks to drain");
     let _ = tokio::time::timeout(Duration::from_secs(5), async {

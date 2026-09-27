@@ -1,5 +1,5 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -16,7 +16,18 @@ pub struct ClusterStatus {
 pub async fn cluster_status(State(state): State<Arc<AppState>>) -> Json<ClusterStatus> {
     let role = format!("{:?}", state.election.role().await);
     let leader = state.election.current_leader().await;
-    let members = state.gossip.members().await.into_iter().map(|m| m.id).collect();
+    let members = state
+        .gossip
+        .members()
+        .await
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
 
-    Json(ClusterStatus { node_id: state.gossip.id.clone(), role, leader, members })
+    Json(ClusterStatus {
+        node_id: state.gossip.id.clone(),
+        role,
+        leader,
+        members,
+    })
 }

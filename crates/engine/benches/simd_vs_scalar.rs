@@ -2,7 +2,7 @@
 //! the README as the "SIMD path is faster" evidence, rather than a
 //! sentence asking to be taken on faith.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use engine::simd_agg::{sum_scalar, sum_simd};
 
 fn bench_sum(c: &mut Criterion) {

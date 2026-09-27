@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 /// A single ingested event. Borrows its payload from the ingestion buffer
-/// wherever possible — `Cow` lets a transform mutate in place without an
+/// wherever possible â€” `Cow` lets a transform mutate in place without an
 /// upfront clone, while still letting owned data flow through when a
 /// plugin needs to produce a brand-new event. Also `Serialize`/`Deserialize`
 /// so an owned `Event<'static>` can cross the WASM plugin boundary as JSON.
@@ -35,10 +35,10 @@ impl<'a> Event<'a> {
 
     pub fn as_f64_slice(&self) -> Option<&[f64]> {
         let bytes = &self.payload;
-        if bytes.len() % 8 != 0 {
+        if !bytes.len().is_multiple_of(8) {
             return None;
         }
-        if (bytes.as_ptr() as usize) % std::mem::align_of::<f64>() != 0 {
+        if !(bytes.as_ptr() as usize).is_multiple_of(std::mem::align_of::<f64>()) {
             return None;
         }
         let len = bytes.len() / 8;

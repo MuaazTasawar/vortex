@@ -2,7 +2,7 @@
 //! `sum`/`mean` use the SIMD path; `min`/`max` are plain scalar scans
 //! (see simd_agg.rs module docs for why min/max weren't SIMD'd here).
 //!
-//! Windows are keyed by `(stream_id, Window)`, not just `Window` — an
+//! Windows are keyed by `(stream_id, Window)`, not just `Window` â€” an
 //! earlier version keyed by window alone, which silently merged every
 //! stream's events into the same bucket. That only became visible once
 //! Phase 7 needed a `stream_id` to persist checkpoints by, which is
@@ -32,11 +32,16 @@ pub struct WindowAggregator {
 
 impl WindowAggregator {
     pub fn new(window_size: Duration) -> Self {
-        WindowAggregator { window_size, windows: HashMap::new() }
+        WindowAggregator {
+            window_size,
+            windows: HashMap::new(),
+        }
     }
 
     pub fn ingest(&mut self, event: &Event<'_>) {
-        let Some(values) = event.as_f64_slice() else { return };
+        let Some(values) = event.as_f64_slice() else {
+            return;
+        };
         let window = Window::covering(event.timestamp_ms, self.window_size);
         self.windows
             .entry((event.stream_id, window))
@@ -53,7 +58,16 @@ impl WindowAggregator {
                 let mean = if count > 0 { sum / count as f64 } else { 0.0 };
                 let min = values.iter().copied().fold(f64::INFINITY, f64::min);
                 let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                ((*stream_id, *window), WindowStats { count, sum, mean, min, max })
+                (
+                    (*stream_id, *window),
+                    WindowStats {
+                        count,
+                        sum,
+                        mean,
+                        min,
+                        max,
+                    },
+                )
             })
             .collect()
     }
@@ -110,8 +124,12 @@ mod tests {
         agg.ingest(&Event::borrowed(2, 500, "k", &payload));
 
         let stats = agg.finalize();
-        assert_eq!(stats.len(), 2, "expected two separate per-stream windows, not one merged window");
-        for (_, s) in stats.iter() {
+        assert_eq!(
+            stats.len(),
+            2,
+            "expected two separate per-stream windows, not one merged window"
+        );
+        for s in stats.values() {
             assert_eq!(s.count, 1);
             assert_eq!(s.sum, 10.0);
         }

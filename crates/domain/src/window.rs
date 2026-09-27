@@ -14,7 +14,10 @@ impl Window {
     pub fn covering(timestamp_ms: i64, size: Duration) -> Self {
         let size_ms = size.as_millis() as i64;
         let start_ms = (timestamp_ms / size_ms) * size_ms;
-        Window { start_ms, end_ms: start_ms + size_ms }
+        Window {
+            start_ms,
+            end_ms: start_ms + size_ms,
+        }
     }
 
     pub fn contains(&self, timestamp_ms: i64) -> bool {

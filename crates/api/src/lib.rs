@@ -12,7 +12,7 @@ use infra::config::Settings;
 use plugins::TransformRegistry;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tokio_util::sync::CancellationToken;
 
 pub struct AppState {
@@ -27,7 +27,10 @@ pub struct AppState {
     pub checkpoint_repo: CheckpointRepo,
 }
 
-pub async fn build_state(settings: Settings, db_pool: sqlx::PgPool) -> anyhow::Result<Arc<AppState>> {
+pub async fn build_state(
+    settings: Settings,
+    db_pool: sqlx::PgPool,
+) -> anyhow::Result<Arc<AppState>> {
     let node_id = uuid::Uuid::new_v4().to_string();
     let gossip_addr: std::net::SocketAddr = settings.gossip_bind_addr.parse()?;
     let gossip = Arc::new(Gossip::bind(node_id.clone(), gossip_addr).await?);
@@ -65,7 +68,7 @@ pub async fn drain_ingestion_once(state: &Arc<AppState>) -> usize {
     drained
 }
 
-/// Runs until `cancel` fires, then returns — letting `main` wait for this
+/// Runs until `cancel` fires, then returns â€” letting `main` wait for this
 /// to actually finish its current iteration rather than being dropped
 /// mid-work when the process exits.
 pub async fn consume_ingestion_loop(state: Arc<AppState>, cancel: CancellationToken) {
@@ -115,7 +118,7 @@ pub async fn persist_checkpoints_loop(state: Arc<AppState>, cancel: Cancellation
                 let snapshot: Vec<((u64, domain::Window), engine::WindowStats)> =
                     state.aggregator.read().await.finalize().into_iter().collect();
                 for ((stream_id, window), stats) in snapshot {
-                    let stats_json = match serde_json::to_value(&stats) {
+                    let stats_json = match serde_json::to_value(stats) {
                         Ok(v) => v,
                         Err(e) => {
                             tracing::warn!(error = %e, "failed to serialize window stats for checkpoint");

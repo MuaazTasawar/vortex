@@ -1,11 +1,11 @@
-use axum::extract::{Query, State};
 use axum::Json;
+use axum::extract::{Query, State};
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::error::ApiError;
 use crate::extractors::auth_user::AuthUser;
-use crate::AppState;
 use infra::checkpoint_repo::CheckpointRow;
 
 #[derive(Deserialize)]
@@ -18,6 +18,9 @@ pub async fn list_checkpoints(
     _auth: AuthUser,
     Query(params): Query<CheckpointQuery>,
 ) -> Result<Json<Vec<CheckpointRow>>, ApiError> {
-    let rows = state.checkpoint_repo.list_for_stream(params.stream_id).await?;
+    let rows = state
+        .checkpoint_repo
+        .list_for_stream(params.stream_id)
+        .await?;
     Ok(Json(rows))
 }

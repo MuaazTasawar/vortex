@@ -16,7 +16,9 @@ pub struct Wal {
 impl Wal {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Wal { writer: BufWriter::new(file) })
+        Ok(Wal {
+            writer: BufWriter::new(file),
+        })
     }
 
     pub fn append(&mut self, record: &[u8]) -> io::Result<()> {

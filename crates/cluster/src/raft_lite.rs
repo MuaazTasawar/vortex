@@ -7,11 +7,11 @@
 use crate::gossip::Gossip;
 use crate::message::{ClusterMessage, MemberState, NodeId};
 use rand::RngExt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
-use tokio::time::{sleep, Instant};
+use tokio::sync::{RwLock, mpsc};
+use tokio::time::{Instant, sleep};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -113,14 +113,21 @@ impl Election {
             .collect();
         let total = peers.len() + 1;
 
-        *self.current_round.write().await = Some(ElectionRound { term, votes: 1, total });
+        *self.current_round.write().await = Some(ElectionRound {
+            term,
+            votes: 1,
+            total,
+        });
 
         if total == 1 {
             self.become_leader(term).await;
             return;
         }
 
-        let msg = ClusterMessage::RequestVote { term, candidate_id: self.id.clone() };
+        let msg = ClusterMessage::RequestVote {
+            term,
+            candidate_id: self.id.clone(),
+        };
         let bytes = serde_json::to_vec(&msg).expect("serialize");
         let socket = self.gossip.socket();
         for peer in &peers {
@@ -138,10 +145,19 @@ impl Election {
 
     async fn send_heartbeats(&self) {
         let term = self.term.load(Ordering::SeqCst);
-        let msg = ClusterMessage::Heartbeat { term, leader_id: self.id.clone() };
+        let msg = ClusterMessage::Heartbeat {
+            term,
+            leader_id: self.id.clone(),
+        };
         let bytes = serde_json::to_vec(&msg).expect("serialize");
         let socket = self.gossip.socket();
-        for peer in self.gossip.members().await.into_iter().filter(|m| m.id != self.id) {
+        for peer in self
+            .gossip
+            .members()
+            .await
+            .into_iter()
+            .filter(|m| m.id != self.id)
+        {
             let _ = socket.send_to(&bytes, peer.addr).await;
         }
     }
@@ -168,7 +184,11 @@ impl Election {
                 }
                 drop(voted_for);
 
-                let response = ClusterMessage::VoteResponse { term, granted, voter: self.id.clone() };
+                let response = ClusterMessage::VoteResponse {
+                    term,
+                    granted,
+                    voter: self.id.clone(),
+                };
                 let bytes = serde_json::to_vec(&response).expect("serialize");
                 let _ = self.gossip.socket().send_to(&bytes, from_addr).await;
                 granted

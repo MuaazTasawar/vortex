@@ -1,10 +1,10 @@
-use axum::extract::{Query, State};
 use axum::Json;
+use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::extractors::auth_user::AuthUser;
 use crate::AppState;
+use crate::extractors::auth_user::AuthUser;
 
 #[derive(Deserialize)]
 pub struct QueryParams {
@@ -35,9 +35,9 @@ pub async fn query_windows(
         .finalize()
         .into_iter()
         .filter(|((sid, w), _)| {
-            params.stream_id.map_or(true, |s| s == *sid)
-                && params.start_ms.map_or(true, |s| w.start_ms >= s)
-                && params.end_ms.map_or(true, |e| w.end_ms <= e)
+            params.stream_id.is_none_or(|s| s == *sid)
+                && params.start_ms.is_none_or(|s| w.start_ms >= s)
+                && params.end_ms.is_none_or(|e| w.end_ms <= e)
         })
         .map(|((sid, w), s)| WindowStatsDto {
             stream_id: sid,

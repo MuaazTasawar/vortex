@@ -1,10 +1,10 @@
+use axum::Json;
 use axum::extract::FromRequestParts;
+use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -54,7 +54,9 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         )
         .map_err(|e| AuthError(format!("invalid token: {e}")))?;
 
-        Ok(AuthUser { user_id: data.claims.sub })
+        Ok(AuthUser {
+            user_id: data.claims.sub,
+        })
     }
 }
 
@@ -64,8 +66,8 @@ mod tests {
     use crate::AppState;
     use axum::body::Body;
     use axum::extract::Request;
-    use jsonwebtoken::{encode, EncodingKey, Header};
-    use tokio::sync::{broadcast, RwLock};
+    use jsonwebtoken::{EncodingKey, Header, encode};
+    use tokio::sync::{RwLock, broadcast};
 
     /// Builds a real `AppState` without opening a database connection Ã¢â‚¬â€
     /// `connect_lazy` validates the URL but defers the actual socket
@@ -88,7 +90,9 @@ mod tests {
             db_pool,
             settings,
             ingestion: Arc::new(engine::RingBuffer::with_capacity(2)),
-            aggregator: RwLock::new(engine::WindowAggregator::new(std::time::Duration::from_secs(1))),
+            aggregator: RwLock::new(engine::WindowAggregator::new(
+                std::time::Duration::from_secs(1),
+            )),
             transform_registry: plugins::TransformRegistry::with_native_transforms(),
             stats_tx: broadcast::channel(1).0,
             gossip: test_gossip(),
@@ -123,7 +127,12 @@ mod tests {
             sub: user_id.to_string(),
             exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
         };
-        encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes())).unwrap()
+        encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -148,7 +157,11 @@ mod tests {
         let request = Request::builder().body(Body::empty()).unwrap();
         let (mut parts, _) = request.into_parts();
 
-        assert!(AuthUser::from_request_parts(&mut parts, &state).await.is_err());
+        assert!(
+            AuthUser::from_request_parts(&mut parts, &state)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -162,6 +175,10 @@ mod tests {
             .unwrap();
         let (mut parts, _) = request.into_parts();
 
-        assert!(AuthUser::from_request_parts(&mut parts, &state).await.is_err());
+        assert!(
+            AuthUser::from_request_parts(&mut parts, &state)
+                .await
+                .is_err()
+        );
     }
 }

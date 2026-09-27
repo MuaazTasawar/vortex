@@ -39,6 +39,8 @@ async fn a_leader_is_elected_among_three_nodes() {
         distinct.len(),
         1,
         "expected exactly one leader across the cluster, got a={:?} b={:?} c={:?}",
-        la, lb, lc
+        la,
+        lb,
+        lc
     );
 }
