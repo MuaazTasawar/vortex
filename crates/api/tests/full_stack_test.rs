@@ -35,6 +35,7 @@ async fn full_gateway_flow_against_a_real_postgres() {
         gossip_bind_addr: "127.0.0.1:0".into(),
         gossip_seeds: vec![],
         http_bind_addr: "127.0.0.1:0".into(),
+        window_retention_secs: 600,
     };
 
     let state = build_state(settings, db_pool).await.expect("state builds");

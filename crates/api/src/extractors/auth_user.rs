@@ -69,7 +69,7 @@ mod tests {
     use jsonwebtoken::{EncodingKey, Header, encode};
     use tokio::sync::{RwLock, broadcast};
 
-    /// Builds a real `AppState` without opening a database connection Ã¢â‚¬â€
+    /// Builds a real `AppState` without opening a database connection ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
     /// `connect_lazy` validates the URL but defers the actual socket
     /// connect until a query runs, which lets us exercise auth logic
     /// (which never touches the DB) without needing Postgres running.
@@ -84,6 +84,7 @@ mod tests {
             gossip_bind_addr: "127.0.0.1:0".into(),
             gossip_seeds: vec![],
             http_bind_addr: "127.0.0.1:0".into(),
+            window_retention_secs: 600,
         };
 
         Arc::new(AppState {
@@ -106,7 +107,7 @@ mod tests {
     }
 
     // Gossip/Election aren't exercised by these tests, but AppState needs
-    // real values to construct Ã¢â‚¬â€ bind on port 0 (OS-assigned) so tests
+    // real values to construct ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â bind on port 0 (OS-assigned) so tests
     // never collide with each other or a real running node.
     fn test_gossip() -> Arc<cluster::Gossip> {
         Arc::new(

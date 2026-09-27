@@ -25,6 +25,12 @@ async fn main() -> anyhow::Result<()> {
     let h1 = tokio::spawn(api::consume_ingestion_loop(state.clone(), cancel.clone()));
     let h2 = tokio::spawn(api::broadcast_stats_loop(state.clone(), cancel.clone()));
     let h3 = tokio::spawn(api::persist_checkpoints_loop(state.clone(), cancel.clone()));
+    let retention = Duration::from_secs(settings.window_retention_secs);
+    let h4 = tokio::spawn(api::evict_windows_loop(
+        state.clone(),
+        cancel.clone(),
+        retention,
+    ));
 
     let app = api::routes::build_router(state);
     let listener = tokio::net::TcpListener::bind(&settings.http_bind_addr).await?;
@@ -38,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("server stopped, waiting for background tasks to drain");
     let _ = tokio::time::timeout(Duration::from_secs(5), async {
-        let _ = tokio::join!(h1, h2, h3);
+        let _ = tokio::join!(h1, h2, h3, h4);
     })
     .await;
 

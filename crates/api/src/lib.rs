@@ -68,7 +68,7 @@ pub async fn drain_ingestion_once(state: &Arc<AppState>) -> usize {
     drained
 }
 
-/// Runs until `cancel` fires, then returns â€” letting `main` wait for this
+/// Runs until `cancel` fires, then returns Ã¢â‚¬â€ letting `main` wait for this
 /// to actually finish its current iteration rather than being dropped
 /// mid-work when the process exits.
 pub async fn consume_ingestion_loop(state: Arc<AppState>, cancel: CancellationToken) {
@@ -100,6 +100,33 @@ pub async fn broadcast_stats_loop(state: Arc<AppState>, cancel: CancellationToke
                     state.aggregator.read().await.finalize().into_iter().collect();
                 if let Ok(json) = serde_json::to_string(&snapshot) {
                     let _ = state.stats_tx.send(json);
+                }
+            }
+        }
+    }
+}
+
+/// Checks every 60s for windows past `retention` and removes them from
+/// memory. 60s check interval against a (default) 600s retention gives
+/// a wide safety margin over the 5s checkpoint-persist interval — every
+/// window is persisted roughly 100+ times before it's ever evicted.
+pub async fn evict_windows_loop(
+    state: Arc<AppState>,
+    cancel: CancellationToken,
+    retention: Duration,
+) {
+    let mut tick = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!("evict_windows_loop shutting down");
+                break;
+            }
+            _ = tick.tick() => {
+                let cutoff_ms = chrono::Utc::now().timestamp_millis() - (retention.as_millis() as i64);
+                let removed = state.aggregator.write().await.evict_older_than(cutoff_ms);
+                if removed > 0 {
+                    tracing::info!(removed, "evicted aged-out windows from memory");
                 }
             }
         }
