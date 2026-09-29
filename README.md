@@ -24,6 +24,7 @@ Think "a small, honest slice of Kafka + Flink + a WASM plugin host." Built in ni
 - [API reference with examples](#api-reference-with-examples)
 - [Running it locally](#running-it-locally)
 - [Running the tests](#running-the-tests)
+- [CI](#ci)
 - [Troubleshooting](#troubleshooting)
 - [Known limitations](#known-limitations)
 - [Dependency notes](#dependency-notes)
@@ -62,7 +63,7 @@ flowchart LR
     API <-->|gossip + leader election| CLUSTER[cluster: SWIM-lite + Raft-lite]
 ```
 
-**Request flow for `POST /ingest`:** the request is authenticated (JWT), optionally passed through a named transform (native, macro-registered, or WASM-loaded), pushed onto a lock-free ring buffer, then asynchronously drained into a SIMD-backed per-`(stream_id, window)` aggregator. Every few seconds, the current aggregation state is checkpointed to Postgres and broadcast to any subscribed WebSocket clients.
+**Request flow for `POST /ingest`:** the request is authenticated (JWT), optionally passed through a named transform (native, macro-registered, or WASM-loaded), pushed onto a lock-free ring buffer, then asynchronously drained into a SIMD-backed per-`(stream_id, window)` aggregator. Every few seconds, the current aggregation state is checkpointed to Postgres and broadcast to any subscribed WebSocket clients. Windows that age past their retention period are evicted from memory.
 
 ---
 
@@ -76,7 +77,7 @@ flowchart LR
 | `macros` | `#[transform]` procedural attribute macro | procedural macros, `inventory`-based compile-time-to-runtime registration |
 | `plugins` | WASM plugin host (`wasmtime`), transform registry | dynamic dispatch, a hand-defined host/guest ABI |
 | `infra` | Config loading, `CheckpointRepo` (Postgres persistence) | kept as a leaf crate — knows *how* to talk to Postgres, not *what* the data means |
-| `api` | Axum HTTP/WS gateway: JWT auth, ingestion, query, checkpoints, cluster status, rate limiting | ties every other crate together behind real endpoints; split into `lib.rs` + thin `main.rs` specifically so it's testable |
+| `api` | Axum HTTP/WS gateway: JWT auth, ingestion, query, checkpoints, cluster status, rate limiting, window eviction | ties every other crate together behind real endpoints; split into `lib.rs` + thin `main.rs` specifically so it's testable |
 
 Dependency direction is strictly one-way: `domain` depends on nothing else in the workspace; `engine`, `cluster`, and `plugins` depend only on `domain`; `infra` is a leaf with no dependency on business-logic crates; `api` is the only crate that knows about everything.
 
@@ -94,7 +95,8 @@ Dependency direction is strictly one-way: `domain` depends on nothing else in th
 | 6 | Axum API gateway: JWT auth, ingest, query, cluster status, WebSocket stream | Auth extractor tested directly (valid token, missing header, wrong secret) |
 | 7 | Postgres checkpoint persistence | A real cross-stream aggregation bug was caught and fixed here |
 | 8 | `api` split into `lib.rs` + `main.rs`; full-stack integration test | One test, real disposable Postgres, exercises the entire gateway through the real HTTP router |
-| 9 | Rate limiting, graceful shutdown, `cargo-deny`, Dockerfile, this README | Hand-rolled rate limiter with its own unit tests; `CancellationToken`-based shutdown that actually drains background work |
+| 9 | Rate limiting, graceful shutdown, `cargo-deny`, Dockerfile, README | Hand-rolled rate limiter with its own unit tests; `CancellationToken`-based shutdown that actually drains background work |
+| Post-9 | CI pipeline (GitHub Actions), window eviction | Every push now auto-runs fmt/clippy/tests/loom/deny; `WindowAggregator.evict_older_than()` has dedicated unit tests for both the eviction and no-op cases |
 
 ---
 
@@ -190,9 +192,10 @@ This is tested against a **hand-written WAT (WebAssembly Text) module** that imp
 `engine::simd_agg::sum_simd` processes four `f64`s at a time using the `wide` crate's `f64x4` (a portable SIMD type that compiles down to real SSE/AVX/NEON instructions depending on target). The core loop:
 
 ```rust
+let (chunks, remainder) = data.as_chunks::<4>();
 let mut acc = f64x4::splat(0.0);
-for chunk in data.chunks_exact(4) {
-    acc += f64x4::from([chunk[0], chunk[1], chunk[2], chunk[3]]);
+for chunk in chunks {
+    acc += f64x4::from(*chunk);
 }
 acc.reduce_add() + remainder.iter().sum::<f64>()   // handle the leftover < 4 elements
 ```
@@ -211,7 +214,11 @@ The correctness test sweeps sizes `[0, 1, 3, 4, 5, 16, 17, 1000]` — deliberate
 
 **`sqlx::query_as` (runtime), not `sqlx::query!` (compile-time-checked).** The compile-time macro needs a live, reachable database matching `DATABASE_URL` just to run `cargo build` — meaning the whole workspace would fail to compile for anyone without Postgres running locally. The runtime variant trades some compile-time SQL safety for the project being buildable everywhere; the real query behavior is what the Phase 8 integration test actually exercises.
 
-**Rate limiting is hand-rolled, not an external crate.** After three separate dependency-API-drift incidents in one project (below), the last phase wasn't the place to gamble on a fourth. A fixed-window per-IP limiter is small enough to own outright, with its own unit tests.
+**Rate limiting is hand-rolled, not an external crate.** After three separate dependency-API-drift incidents in one project (below), Phase 9 wasn't the place to gamble on a fourth. A fixed-window per-IP limiter is small enough to own outright, with its own unit tests.
+
+**Window eviction is wall-clock TTL, not event-time watermark-based.** A real streaming system would typically evict based on a watermark (tracking how far event-time has advanced per stream, accounting for out-of-order arrival). TTL is simpler to reason about and test deterministically, and it composes safely with checkpointing: retention (default 600s) is kept far longer than the checkpoint-persist interval (5s), so every window is guaranteed to reach Postgres long before it's ever evicted from memory. The tradeoff: it assumes `timestamp_ms` is real epoch time — event timestamps that aren't (e.g. small test values) age out almost immediately once eviction actually runs.
+
+**`/query` does not fall back to Postgres for evicted windows.** `/checkpoints` already exists as the dedicated "give me history" endpoint. Keeping `/query` strictly in-memory (live state) and `/checkpoints` strictly persisted (history) is a cleaner API contract than one endpoint that sometimes reads memory and sometimes reads the database with no way for a caller to know which.
 
 ---
 
@@ -227,6 +234,10 @@ The correctness test sweeps sizes `[0, 1, 3, 4, 5, 16, 17, 1000]` — deliberate
 - `axum`'s WebSocket support is feature-gated behind `ws`, not enabled by default.
 
 **Axum middleware trait-bound rough edge.** Mixing a `State<S>` extractor with `Option<ConnectInfo<SocketAddr>>` on `axum::middleware::from_fn_with_state` (and even a `from_fn` closure with that same extractor signature) fails to satisfy axum 0.8.9's generated `Service` trait bounds — a genuine library rough edge, not a misuse of the API. Worked around by reading `ConnectInfo` directly out of `req.extensions()` inside the handler body instead of as a typed extractor parameter, which sidesteps the problematic code path entirely while doing the same thing.
+
+**CI's clippy caught a lint the local toolchain didn't have yet.** GitHub Actions installs the latest stable `clippy` on every run; a local machine's toolchain can lag behind. `sum_simd`'s `chunks_exact(4)` was flagged for a newly-stabilized alternative (`as_chunks::<4>()`) that CI's newer clippy knew about and the local one didn't — a concrete example of why CI catches things a one-time local check can't.
+
+**Regex-based file edits silently corrupted em dashes and curly quotes, and silently no-op'd on multi-line patterns that didn't match exactly.** `Get-Content -Raw` on Windows PowerShell doesn't reliably default to UTF-8, so round-tripping a UTF-8 file (read → regex replace → write) through it can mangle multi-byte characters. Separately, `-replace` doesn't error when its search pattern doesn't match — it just does nothing, which let a couple of intended README edits (removing a limitation, renumbering a list) silently fail to apply. Fixed by doing a full clean rewrite via direct UTF-8 file writes instead of further regex patching. Worth noting: this class of bug only ever affected documentation prose, never compiled code — CI stayed green throughout.
 
 ---
 
@@ -254,7 +265,7 @@ All endpoints except `/auth/register` and `/auth/login` require `Authorization: 
 curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username": "alice", "password": "hunter42"}'
-# → { "token": "eyJhbGciOi..." }
+# -> { "token": "eyJhbGciOi..." }
 ```
 
 ### Login
@@ -277,7 +288,7 @@ curl -X POST http://localhost:8080/ingest \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{\"stream_id\": 1, \"timestamp_ms\": 500, \"key\": \"sensor-a\", \"payload_b64\": \"$PAYLOAD\"}"
-# → { "accepted": true }
+# -> { "accepted": true }
 ```
 
 To run a transform (native or WASM-loaded) before ingestion, add `"transform": "uppercase_key"` to the body.
@@ -287,8 +298,10 @@ To run a transform (native or WASM-loaded) before ingestion, add `"transform": "
 ```bash
 curl "http://localhost:8080/query?stream_id=1" \
   -H "Authorization: Bearer $TOKEN"
-# → [ { "stream_id": 1, "start_ms": 0, "end_ms": 1000, "count": 1, "sum": 5.0, "mean": 5.0, "min": 5.0, "max": 5.0 } ]
+# -> [ { "stream_id": 1, "start_ms": 0, "end_ms": 1000, "count": 1, "sum": 5.0, "mean": 5.0, "min": 5.0, "max": 5.0 } ]
 ```
+
+Note: only windows still within `WINDOW_RETENTION_SECS` are returned — evicted windows are gone from this endpoint (use `/checkpoints` for history).
 
 ### List persisted checkpoints
 
@@ -301,7 +314,7 @@ curl "http://localhost:8080/checkpoints?stream_id=1" \
 
 ```bash
 curl http://localhost:8080/cluster/status
-# → { "node_id": "...", "role": "Leader", "leader": "...", "members": ["..."] }
+# -> { "node_id": "...", "role": "Leader", "leader": "...", "members": ["..."] }
 ```
 
 ### Live stats over WebSocket
@@ -318,7 +331,7 @@ Full endpoint table:
 | `POST` | `/auth/register` | — | Create a user, returns a JWT |
 | `POST` | `/auth/login` | — | Returns a JWT on valid credentials |
 | `POST` | `/ingest` | required | Push an event, optionally through a named transform |
-| `GET` | `/query` | required | Current in-memory windowed aggregates |
+| `GET` | `/query` | required | Current in-memory windowed aggregates (not yet evicted) |
 | `GET` | `/checkpoints` | required | Persisted checkpoint rows from Postgres |
 | `GET` | `/cluster/status` | — | Gossip membership + election state |
 | `GET` | `/stream/ws` | — | WebSocket aggregation stream |
@@ -342,7 +355,7 @@ copy .env.example .env
 cargo run -p api
 ```
 
-The server listens on `HTTP_BIND_ADDR` (default `0.0.0.0:8080`) and joins the gossip cluster on `GOSSIP_BIND_ADDR` (default `0.0.0.0:7946`). To run a second node on the same machine for a local multi-node cluster, set a different `HTTP_BIND_ADDR`/`GOSSIP_BIND_ADDR` and point `GOSSIP_SEEDS` at the first node's gossip address.
+The server listens on `HTTP_BIND_ADDR` (default `0.0.0.0:8080`) and joins the gossip cluster on `GOSSIP_BIND_ADDR` (default `0.0.0.0:7946`). In-memory windows are evicted once their end time is more than `WINDOW_RETENTION_SECS` (default 600) in the past, checked every 60 seconds — comfortably longer than the 5-second checkpoint-persist interval, so every window reaches Postgres long before it's ever evicted from memory. To run a second node on the same machine for a local multi-node cluster, set a different `HTTP_BIND_ADDR`/`GOSSIP_BIND_ADDR` and point `GOSSIP_SEEDS` at the first node's gossip address.
 
 **Docker:**
 
@@ -359,7 +372,7 @@ docker run -p 8080:8080 --env-file .env vortex
 # Everything except the loom-specific concurrency check
 cargo test --workspace
 
-# The loom model-checker on the ring buffer — exhaustive interleaving
+# The loom model-checker on the ring buffer -- exhaustive interleaving
 # search, not sampling. This is the real proof, not the quick sanity check.
 $env:RUSTFLAGS = "--cfg loom"
 cargo test -p engine --release --lib loom_tests
@@ -370,9 +383,27 @@ cargo bench -p engine
 
 # Dependency license/advisory audit (requires `cargo install cargo-deny` first)
 cargo deny check
+
+# Format + lint, matching exactly what CI enforces
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 `cargo test --workspace` includes `full_gateway_flow_against_a_real_postgres`, which needs Docker running (it spins up a disposable Postgres via `testcontainers`) — this is the one test that will fail if Docker Desktop isn't started.
+
+---
+
+## CI
+
+Every push and PR to `main` runs automatically via GitHub Actions (`.github/workflows/ci.yml`):
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings` (warnings are hard failures)
+- The full test suite, against a real Postgres service container (not `testcontainers` — GitHub-hosted runners don't support Docker-in-Docker by default, so CI uses a `services:` Postgres instead; locally, tests still use `testcontainers`)
+- `loom` model-check on the ring buffer
+- `cargo-deny` license/advisory audit, as a separate job
+
+CI's `clippy` and `cargo-deny` are pulled at their latest versions on every run, which means they can catch things a local toolchain — installed once and not necessarily kept current — won't. Both have already happened in this project (see [Real bugs caught](#real-bugs-caught-during-the-build)).
 
 ---
 
@@ -382,9 +413,13 @@ cargo deny check
 
 **A dependency's API doesn't match what's in this README.** This project already hit three real instances of this (`argon2`, `jsonwebtoken`, `axum`'s `ws` feature) — fast-moving crates change their surface between versions. Check the crate's current docs on docs.rs against the version in `Cargo.lock`, and consider pinning if you hit this.
 
+**`cargo fmt`/`cargo clippy` say the component isn't installed.** Run `rustup component add rustfmt clippy` once — CI installs these automatically, but a local toolchain needs them added manually.
+
 **`unexpected cfg condition name: loom` warnings during a normal build.** Harmless — `loom` is a real but non-standard `#[cfg]` flag used only for the model-checking test run (`RUSTFLAGS="--cfg loom"`). `engine/Cargo.toml` has a `[lints.rust] unexpected_cfgs` allowance for exactly this.
 
 **PowerShell `[System.IO.File]::WriteAllText` writes to the wrong directory.** `.NET`'s working directory and PowerShell's `$PWD` can silently diverge, especially after a `Set-Location` inside a script block. Always prefix paths with `$PWD\` explicitly rather than relying on a bare relative path.
+
+**Editing a text-heavy file (like this README) via `Get-Content -Raw` + regex + `WriteAllText` corrupts em dashes/curly quotes, or silently fails to apply a multi-line change.** `Get-Content` doesn't reliably default to UTF-8 on Windows PowerShell, and `-replace` silently no-ops when its pattern doesn't match rather than erroring. For anything beyond a small single-line fix, a full rewrite via a direct UTF-8 write is safer than patching.
 
 ---
 
@@ -392,12 +427,12 @@ cargo deny check
 
 These are documented gaps, not oversights — each was a deliberate scope decision made explicit at the time:
 
-- **Windows are never evicted.** The in-memory aggregator accumulates `(stream_id, Window)` buckets forever; a long-running node will grow unbounded memory. A retention/eviction policy is the natural next piece of work.
-- **The rate limiter's IP map never evicts idle entries.** Same class of gap as above, smaller blast radius.
+- **The rate limiter's IP map never evicts idle entries.** Unlike `WindowAggregator` (which now has TTL-based eviction), the rate limiter's per-IP map grows unbounded over the life of a process. Smaller blast radius than the window-growth issue was, but the same class of gap.
 - **Raft has no log replication**, only leader election.
 - **SIMD covers `sum` only**; `min`/`max` in the windowed aggregator are scalar.
 - **Gossip has no indirect probing.** Full SWIM probes through *k* other members before declaring a peer Suspect, to avoid false positives from one lossy network path; this implementation accepts that tradeoff.
 - **`sqlx::query_as` is runtime-checked, not compile-time-checked** (deliberate — see [Key design decisions](#key-design-decisions-and-their-tradeoffs)).
+- **Window eviction is wall-clock TTL, not event-time/watermark-based** (deliberate — see [Key design decisions](#key-design-decisions-and-their-tradeoffs)). Assumes `timestamp_ms` is real epoch time.
 
 ---
 
@@ -407,6 +442,7 @@ These are documented gaps, not oversights — each was a deliberate scope decisi
 - `jsonwebtoken` needs the `rust_crypto` feature explicitly enabled.
 - `axum` needs the `ws` feature explicitly enabled for the WebSocket endpoint.
 - `engine`'s `loom` support is gated behind `--cfg loom` via `[target.'cfg(loom)'.dependencies]`, so it never affects a normal build.
+- `rsa` (transitive, via `jsonwebtoken`'s `rust_crypto` feature) has an unpatched advisory (RUSTSEC-2023-0071, the "Marvin Attack" timing side-channel). Explicitly `ignore`d in `deny.toml` with justification: this project only ever signs JWTs with HS256 (HMAC), never RSA, so the vulnerable code path is never exercised.
 
 ---
 
@@ -414,12 +450,14 @@ These are documented gaps, not oversights — each was a deliberate scope decisi
 
 Natural next steps, roughly in order of value:
 
-1. **Window eviction / retention policy** — the most impactful gap; unbounded memory growth is the one limitation that actually matters for a long-running deployment.
-2. **SIMD `min`/`max`** — lane-wise comparison + horizontal reduction, benchmarked the same way `sum` was.
-3. **Raft log replication** — turning leader-election-only into full consensus, with the same care taken here (small, testable increments, not a big-bang rewrite).
-4. **Indirect gossip probing** — closing the gap with full SWIM to reduce false-positive Suspect marks from a single lossy path.
-5. **A binary WASM wire format**, replacing the JSON-over-ptr/len ABI, once the ABI shape itself is considered stable.
-6. **`sqlx::query!` migration**, via `cargo sqlx prepare` and a checked-in offline query cache, to get compile-time SQL verification back without requiring a live DB for every contributor.
+1. **SIMD `min`/`max`** — lane-wise comparison + horizontal reduction, benchmarked the same way `sum` was.
+2. **Raft log replication** — turning leader-election-only into full consensus, with the same care taken here (small, testable increments, not a big-bang rewrite).
+3. **Indirect gossip probing** — closing the gap with full SWIM to reduce false-positive Suspect marks from a single lossy path.
+4. **A binary WASM wire format**, replacing the JSON-over-ptr/len ABI, once the ABI shape itself is considered stable.
+5. **`sqlx::query!` migration**, via `cargo sqlx prepare` and a checked-in offline query cache, to get compile-time SQL verification back without requiring a live DB for every contributor.
+6. **Rate limiter IP-map eviction**, the same category of fix as window eviction, smaller in scope.
+7. **`/metrics` endpoint** (Prometheus format) — queue depth, ingest rate, election term — for real observability beyond log lines.
+8. **Fuzzing** (`cargo fuzz`) on the three real parsing/boundary surfaces: the proc macro's function-signature parsing, WASM guest response bytes, and gossip UDP message deserialization.
 
 ---
 
@@ -427,30 +465,32 @@ Natural next steps, roughly in order of value:
 
 ```
 vortex/
-├── Cargo.toml                  # workspace root
-├── deny.toml                   # cargo-deny config
-├── docker-compose.yml          # local Postgres for development
-├── Dockerfile                  # cargo-chef multi-stage build
-├── .env.example
-├── migrations/
-│   └── 0001_init.sql           # users, checkpoints tables
-├── crates/
-│   ├── domain/                 # Event, Window, Transform trait, DomainError
-│   ├── engine/                 # ring buffer, SIMD aggregation, WAL
-│   │   └── benches/simd_vs_scalar.rs
-│   ├── cluster/                # gossip + leader election
-│   │   └── tests/election_test.rs
-│   ├── macros/                 # #[transform] proc macro
-│   ├── plugins/                # WASM host, transform registry
-│   ├── infra/                  # config, CheckpointRepo
-│   └── api/                    # Axum gateway — lib.rs + thin main.rs
-│       ├── src/
-│       │   ├── lib.rs
-│       │   ├── main.rs
-│       │   ├── handlers/       # auth, ingest, query, checkpoints, cluster
-│       │   ├── middleware/     # rate_limit, request_id
-│       │   ├── extractors/     # auth_user (JWT)
-│       │   ├── routes/
-│       │   └── ws.rs
-│       └── tests/full_stack_test.rs   # full integration test, real Postgres
++-- Cargo.toml                  # workspace root
++-- deny.toml                   # cargo-deny config
++-- docker-compose.yml          # local Postgres for development
++-- Dockerfile                  # cargo-chef multi-stage build
++-- LICENSE                     # MIT
++-- .env.example
++-- .github/workflows/ci.yml    # fmt, clippy, tests, loom, cargo-deny on every push
++-- migrations/
+|   +-- 0001_init.sql           # users, checkpoints tables
++-- crates/
+    +-- domain/                 # Event, Window, Transform trait, DomainError
+    +-- engine/                 # ring buffer, SIMD aggregation, WAL, window eviction
+    |   +-- benches/simd_vs_scalar.rs
+    +-- cluster/                # gossip + leader election
+    |   +-- tests/election_test.rs
+    +-- macros/                 # #[transform] proc macro
+    +-- plugins/                # WASM host, transform registry
+    +-- infra/                  # config, CheckpointRepo
+    +-- api/                    # Axum gateway -- lib.rs + thin main.rs
+        +-- src/
+        |   +-- lib.rs
+        |   +-- main.rs
+        |   +-- handlers/       # auth, ingest, query, checkpoints, cluster
+        |   +-- middleware/     # rate_limit, request_id
+        |   +-- extractors/     # auth_user (JWT)
+        |   +-- routes/
+        |   +-- ws.rs
+        +-- tests/full_stack_test.rs   # full integration test, real Postgres
 ```
