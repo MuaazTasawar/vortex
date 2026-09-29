@@ -1,4 +1,4 @@
-//! Leader election only — no log replication (a deliberate scope cut;
+//! Leader election only â€” no log replication (a deliberate scope cut;
 //! see the project's Phase 3 discussion for why). A node is Follower,
 //! Candidate, or Leader; it becomes Candidate on a randomized election
 //! timeout with no heartbeat, requests votes from every gossip-known
@@ -61,6 +61,10 @@ impl Election {
 
     pub async fn role(&self) -> Role {
         *self.role.read().await
+    }
+
+    pub fn term(&self) -> u64 {
+        self.term.load(Ordering::SeqCst)
     }
 
     pub async fn run(

@@ -53,6 +53,20 @@ impl<T> RingBuffer<T> {
         }
     }
 
+    /// Approximate current number of items in the buffer, computed from
+    /// the wrapping difference of the enqueue/dequeue cursors. "Approximate"
+    /// because other threads may be mid-push/pop concurrently -- fine for
+    /// a metrics gauge, not something to build correctness logic on.
+    pub fn len(&self) -> usize {
+        let enq = self.enqueue_pos.load(Ordering::Relaxed);
+        let deq = self.dequeue_pos.load(Ordering::Relaxed);
+        enq.wrapping_sub(deq)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn try_push(&self, value: T) -> Result<(), T> {
         let mut pos = self.enqueue_pos.load(Ordering::Relaxed);
         loop {
@@ -69,7 +83,7 @@ impl<T> RingBuffer<T> {
                 ) {
                     Ok(_) => {
                         // SAFETY: the CAS above succeeded, which means we
-                        // are the unique thread that claimed this slot —
+                        // are the unique thread that claimed this slot --
                         // no other producer can observe the same `pos`
                         // until we release it by bumping `sequence` below.
                         cell.value.with_mut(|slot| unsafe { (*slot).write(value) });
@@ -130,6 +144,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn len_tracks_pushes_and_pops() {
+        let rb = RingBuffer::with_capacity(4);
+        assert_eq!(rb.len(), 0);
+        assert!(rb.is_empty());
+
+        rb.try_push(1).unwrap();
+        rb.try_push(2).unwrap();
+        assert_eq!(rb.len(), 2);
+        assert!(!rb.is_empty());
+
+        rb.try_pop();
+        assert_eq!(rb.len(), 1);
+    }
+
+    #[test]
     fn push_then_pop_single_thread() {
         let rb = RingBuffer::with_capacity(4);
         assert!(rb.try_push(1).is_ok());
@@ -175,8 +204,6 @@ mod loom_tests {
                     seen.push(v);
                 }
             }
-            // whatever we popped early must be a prefix of [1, 2] —
-            // no duplicates, nothing out of thin air
             for w in seen.windows(2) {
                 assert!(w[0] < w[1]);
             }
