@@ -5,6 +5,7 @@ use domain::Event;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -29,9 +30,16 @@ pub async fn ingest(
     _auth: AuthUser,
     Json(req): Json<IngestRequest>,
 ) -> Result<Json<IngestResponse>, ApiError> {
-    let payload = base64::engine::general_purpose::STANDARD
-        .decode(&req.payload_b64)
-        .map_err(|e| ApiError::BadRequest(format!("invalid base64 payload: {e}")))?;
+    let payload = match base64::engine::general_purpose::STANDARD.decode(&req.payload_b64) {
+        Ok(p) => p,
+        Err(e) => {
+            state
+                .metrics
+                .ingest_rejected_total
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(ApiError::BadRequest(format!("invalid base64 payload: {e}")));
+        }
+    };
 
     let event = Event {
         stream_id: req.stream_id,
@@ -42,23 +50,51 @@ pub async fn ingest(
 
     let event = match &req.transform {
         Some(name) => {
-            let transform = state
-                .transform_registry
-                .get(name)
-                .ok_or_else(|| ApiError::BadRequest(format!("unknown transform '{name}'")))?;
-            let mut out = transform
-                .apply(&event)
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-            out.pop()
-                .ok_or_else(|| ApiError::Internal("transform produced no output".into()))?
+            let transform = match state.transform_registry.get(name) {
+                Some(t) => t,
+                None => {
+                    state
+                        .metrics
+                        .ingest_rejected_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Err(ApiError::BadRequest(format!("unknown transform '{name}'")));
+                }
+            };
+            let mut out = match transform.apply(&event) {
+                Ok(o) => o,
+                Err(e) => {
+                    state
+                        .metrics
+                        .ingest_rejected_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Err(ApiError::BadRequest(e.to_string()));
+                }
+            };
+            match out.pop() {
+                Some(ev) => ev,
+                None => {
+                    state
+                        .metrics
+                        .ingest_rejected_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Err(ApiError::Internal("transform produced no output".into()));
+                }
+            }
         }
         None => event,
     };
 
-    state
-        .ingestion
-        .try_push(event)
-        .map_err(|_| ApiError::Internal("ingestion buffer full".into()))?;
+    if state.ingestion.try_push(event).is_err() {
+        state
+            .metrics
+            .ingest_rejected_total
+            .fetch_add(1, Ordering::Relaxed);
+        return Err(ApiError::Internal("ingestion buffer full".into()));
+    }
 
+    state
+        .metrics
+        .ingest_accepted_total
+        .fetch_add(1, Ordering::Relaxed);
     Ok(Json(IngestResponse { accepted: true }))
 }

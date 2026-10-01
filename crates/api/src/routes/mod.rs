@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
 use crate::AppState;
-use crate::handlers::{auth, checkpoints, cluster, ingest, query};
+use crate::handlers::{auth, checkpoints, cluster, ingest, metrics, query};
 use crate::middleware::rate_limit::{RateLimiterState, check_and_respond};
 use crate::middleware::request_id;
 
@@ -18,6 +18,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/query", get(query::query_windows))
         .route("/checkpoints", get(checkpoints::list_checkpoints))
         .route("/cluster/status", get(cluster::cluster_status))
+        .route("/metrics", get(metrics::metrics_handler))
         .route("/stream/ws", get(crate::ws::stream_ws))
         .layer(axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {

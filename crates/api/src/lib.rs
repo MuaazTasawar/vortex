@@ -1,6 +1,7 @@
 pub mod error;
 pub mod extractors;
 pub mod handlers;
+pub mod metrics;
 pub mod middleware;
 pub mod routes;
 pub mod ws;
@@ -11,6 +12,7 @@ use infra::checkpoint_repo::CheckpointRepo;
 use infra::config::Settings;
 use plugins::TransformRegistry;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::{RwLock, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +27,7 @@ pub struct AppState {
     pub gossip: Arc<Gossip>,
     pub election: Arc<Election>,
     pub checkpoint_repo: CheckpointRepo,
+    pub metrics: metrics::Metrics,
 }
 
 pub async fn build_state(
@@ -56,6 +59,7 @@ pub async fn build_state(
         gossip,
         election,
         checkpoint_repo,
+        metrics: metrics::Metrics::default(),
     }))
 }
 
@@ -68,9 +72,6 @@ pub async fn drain_ingestion_once(state: &Arc<AppState>) -> usize {
     drained
 }
 
-/// Runs until `cancel` fires, then returns Ã¢â‚¬â€ letting `main` wait for this
-/// to actually finish its current iteration rather than being dropped
-/// mid-work when the process exits.
 pub async fn consume_ingestion_loop(state: Arc<AppState>, cancel: CancellationToken) {
     loop {
         tokio::select! {
@@ -108,7 +109,7 @@ pub async fn broadcast_stats_loop(state: Arc<AppState>, cancel: CancellationToke
 
 /// Checks every 60s for windows past `retention` and removes them from
 /// memory. 60s check interval against a (default) 600s retention gives
-/// a wide safety margin over the 5s checkpoint-persist interval — every
+/// a wide safety margin over the 5s checkpoint-persist interval -- every
 /// window is persisted roughly 100+ times before it's ever evicted.
 pub async fn evict_windows_loop(
     state: Arc<AppState>,
@@ -126,6 +127,7 @@ pub async fn evict_windows_loop(
                 let cutoff_ms = chrono::Utc::now().timestamp_millis() - (retention.as_millis() as i64);
                 let removed = state.aggregator.write().await.evict_older_than(cutoff_ms);
                 if removed > 0 {
+                    state.metrics.windows_evicted_total.fetch_add(removed as u64, Ordering::Relaxed);
                     tracing::info!(removed, "evicted aged-out windows from memory");
                 }
             }
@@ -152,12 +154,18 @@ pub async fn persist_checkpoints_loop(state: Arc<AppState>, cancel: Cancellation
                             continue;
                         }
                     };
-                    if let Err(e) = state
+                    match state
                         .checkpoint_repo
                         .upsert(stream_id as i64, window.start_ms, window.end_ms, &stats_json)
                         .await
                     {
-                        tracing::warn!(error = %e, stream_id, "checkpoint upsert failed, will retry next tick");
+                        Ok(()) => {
+                            state.metrics.checkpoint_writes_total.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            state.metrics.checkpoint_write_failures_total.fetch_add(1, Ordering::Relaxed);
+                            tracing::warn!(error = %e, stream_id, "checkpoint upsert failed, will retry next tick");
+                        }
                     }
                 }
             }

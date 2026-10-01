@@ -191,6 +191,7 @@ async fn full_gateway_flow_against_a_real_postgres() {
 
     // 8. cluster status is reachable and reports this node
     let res = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -201,4 +202,24 @@ async fn full_gateway_flow_against_a_real_postgres() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+
+    // 9. metrics endpoint is reachable and reports real ingestion counts
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("vortex_ring_buffer_depth"));
+    assert!(
+        text.contains("vortex_ingest_accepted_total 1"),
+        "expected the one ingest from step 5 to be counted"
+    );
 }

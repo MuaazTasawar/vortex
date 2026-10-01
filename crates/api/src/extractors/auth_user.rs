@@ -69,10 +69,6 @@ mod tests {
     use jsonwebtoken::{EncodingKey, Header, encode};
     use tokio::sync::{RwLock, broadcast};
 
-    /// Builds a real `AppState` without opening a database connection ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-    /// `connect_lazy` validates the URL but defers the actual socket
-    /// connect until a query runs, which lets us exercise auth logic
-    /// (which never touches the DB) without needing Postgres running.
     fn test_state(jwt_secret: &str) -> Arc<AppState> {
         let db_pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:pass@localhost/db")
@@ -103,12 +99,10 @@ mod tests {
                     .connect_lazy("postgres://user:pass@localhost/db")
                     .expect("connect_lazy should not require a live connection"),
             ),
+            metrics: crate::metrics::Metrics::default(),
         })
     }
 
-    // Gossip/Election aren't exercised by these tests, but AppState needs
-    // real values to construct ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â bind on port 0 (OS-assigned) so tests
-    // never collide with each other or a real running node.
     fn test_gossip() -> Arc<cluster::Gossip> {
         Arc::new(
             futures::executor::block_on(cluster::Gossip::bind(
